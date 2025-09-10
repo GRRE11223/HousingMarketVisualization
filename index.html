@@ -52,12 +52,12 @@
 
   <script>
   (async function(){
-    /* ===== 可调样式配置 ===== */
+    /* ===== 样式配置 ===== */
     const CONFIG = {
       BACKGROUND: 'rgba(0,0,0,0)',
       GLOBE_OPACITY: 0,                 // 0 = 完全透明
       SHOW_GRATICULES: true,
-      GRATICULES_COLOR: 'rgba(0,0,0,0.08)',
+      GRATICULES_COLOR: 'rgba(255,255,255,0.08)',
       LAND_COLOR: 'rgba(255,255,255,0.30)',
       LAND_SIDE:  'rgba(255,255,255,0.30)',
       LAND_STROKE:'rgba(0,0,0,0)',
@@ -117,36 +117,43 @@
       return n.toLocaleString();
     }
 
-    // Globe 初始化（透明）
-    const globe = Globe()(document.getElementById('globe'))
+    // Globe 初始化：关键——alpha: true
+    const globe = Globe({
+      rendererConfig: { alpha: true, antialias: true }
+    })(document.getElementById('globe'))
       .backgroundColor(CONFIG.BACKGROUND)
       .width(window.innerWidth).height(window.innerHeight)
       .pointOfView({ lat: 38, lng: -98, altitude: 1.5 });
+
     window.addEventListener('resize', ()=>globe.width(window.innerWidth).height(window.innerHeight));
 
-    setTimeout(()=>{
-      globe.globeImageUrl(null).bumpImageUrl(null).showAtmosphere(false).showGraticules(CONFIG.SHOW_GRATICULES);
+    // 统一的透明设置（初始化和纹理变更后都调用）
+    function makeGlobeTransparent(){
+      const mat = globe.globeMaterial();
+      mat.transparent = true;
+      mat.opacity = CONFIG.GLOBE_OPACITY; // 0
+      mat.depthWrite = false;
 
-      // ⬇⬇ 兼容 graticule(s)Color API 名称差异
+      const r = globe.renderer();
+      if (r.setClearAlpha) r.setClearAlpha(0);
+      r.setClearColor(0x000000, 0);
+      globe.scene().background = null;
+    }
+
+    setTimeout(()=>{
+      globe.showAtmosphere(false).showGraticules(CONFIG.SHOW_GRATICULES);
+
+      // 兼容 graticule(s)Color
       const setGraticuleColor =
         (globe.graticulesColor && globe.graticulesColor.bind(globe)) ||
         (globe.graticuleColor  && globe.graticuleColor.bind(globe));
       if (setGraticuleColor) setGraticuleColor(CONFIG.GRATICULES_COLOR);
 
-      // 透明材质
-      const mat = globe.globeMaterial();
-      mat.transparent = true;
-      mat.opacity = CONFIG.GLOBE_OPACITY;
-      mat.depthWrite = false;
+      globe.globeImageUrl(null).bumpImageUrl(null); // 不使用纹理
+      makeGlobeTransparent();
 
       globe.polygonsTransitionDuration(CONFIG.TRANSITION_MS);
-
-      // ⬇⬇ 强制 three.js 清屏透明，杜绝“黑盘”
-      const r = globe.renderer();
-      if (r.setClearAlpha) r.setClearAlpha(0);
-      r.setClearColor(0x000000, 0);
-      globe.scene().background = null;
-    }, 150);
+    }, 50);
 
     // topo -> geojson（一次）
     const countiesGeo = topojson.feature(COUNTIES_TOPO, COUNTIES_TOPO.objects.counties);
@@ -172,6 +179,13 @@
         });
     }
 
+    function clearLegend(){
+      legendTitle.textContent = '';
+      legendBar.style.background = 'none';
+      legendMin.textContent = '-';
+      legendMax.textContent = '-';
+    }
+
     function updateData(){
       const metric = metricSel.value;
       const chosen = Array.from(statesSel.selectedOptions).map(o=>o.value);
@@ -182,7 +196,13 @@
 
       const vals = rows.filter(r=>all || chosen.includes(r.STATE_CODE))
                        .map(r=>Number(r[metric])).filter(Number.isFinite).sort((a,b)=>a-b);
-      if(!vals.length) return;
+
+      if(!vals.length){
+        globe.polygonsData(landPolysConst);
+        clearLegend();
+        refreshStyles();
+        return;
+      }
 
       const vmin = quantile(vals,0.05), vmax = quantile(vals,0.95);
       const norm = v => (v - vmin)/(vmax - vmin || 1);
@@ -222,10 +242,11 @@
 
       refreshStyles();
 
-      // 关闭后续过渡，避免 hover 触发重绘动画
+      // 关闭后续过渡，避免 hover 抖动
       setTimeout(()=>globe.polygonsTransitionDuration(0), CONFIG.TRANSITION_MS+50);
     }
 
+    // hover & click
     globe.onPolygonHover(f => { hoverId = (f && !f.isLand) ? f.id : null; refreshStyles(); });
     globe.onPolygonClick(f => {
       if(!f || f.isLand) return;
@@ -236,11 +257,37 @@
       pinnedEl.innerHTML = data; pinnedEl.style.display = selectedFips.size ? 'block':'none';
     });
 
-    document.getElementById('resetSel').addEventListener('click',()=>{ selectedFips.clear(); refreshStyles(); pinnedEl.style.display='none'; });
-    metricSel.addEventListener('change', updateData);
-    statesSel.addEventListener('change', updateData);
+    // (All) 选择约束
+    statesSel.addEventListener('change', () => {
+      const opts = Array.from(statesSel.options);
+      const allOpt = opts.find(o => o.value === '(All)');
+      const chosen = Array.from(statesSel.selectedOptions).map(o => o.value);
+      if (chosen.length > 1 && chosen.includes('(All)')) {
+        allOpt.selected = false;
+      }
+      if (chosen.length === 0) {
+        allOpt.selected = true;
+      }
+      updateData();
+    });
 
-    updateData(); // 首次渲染
+    // Reset：清县选 & 州回到 (All)
+    document.getElementById('resetSel').addEventListener('click',()=>{
+      selectedFips.clear();
+      const opts = Array.from(statesSel.options);
+      opts.forEach(o => (o.selected = false));
+      const allOpt = opts.find(o => o.value === '(All)');
+      if (allOpt) allOpt.selected = true;
+      pinnedEl.style.display='none';
+      refreshStyles();
+      updateData();
+    });
+
+    // 首次渲染
+    updateData();
+
+    // 若后续你改变过纹理（一般不会），记得再调一次
+    // globe.globeImageUrl(null).bumpImageUrl(null); makeGlobeTransparent();
   })();
   </script>
 </body>
