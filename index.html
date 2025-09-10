@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>US County Housing — No Globe Mesh</title>
+<title>US County Housing — Transparent White Globe</title>
 <style>
   html,body{height:100%;margin:0;background:transparent;}
   body{font-family:Inter,system-ui,-apple-system,Segoe UI,Arial;color:#1a1a1a;overflow:hidden;}
   #globe{position:fixed; inset:0; background:transparent;}
   #globe canvas{background:transparent !important;}
+
   .panel{position:fixed;left:20px;top:20px;z-index:10;width:280px;max-height:80vh;overflow:auto;
          background:rgba(255,255,255,.25);border:1px solid rgba(255,255,255,.4);backdrop-filter:blur(30px) saturate(200%);
          box-shadow:0 8px 32px rgba(0,0,0,.1),0 1px 0 rgba(255,255,255,.6) inset;border-radius:16px;padding:20px;}
@@ -21,13 +22,14 @@
   .bar{height:12px;border-radius:8px;margin:8px 0;}
   .minmax{display:flex;justify-content:space-between;color:#666;font-size:12px;}
   .pin{border:1px solid rgba(255,255,255,.4);border-radius:12px;padding:10px 12px;margin:6px 0;background:rgba(255,255,255,.2)}
+  .err{position:fixed;right:20px;bottom:20px;background:#7f1d1d;color:#fee2e2;padding:10px 12px;border-radius:10px;border:1px solid #ef4444}
 </style>
 </head>
 <body>
 
 <div class="panel">
   <div class="section">
-    <div id="legend-title" class="legend-title"></div>
+    <div id="legend-title" class="legend-title">-</div>
     <div class="bar" id="legend-bar"></div>
     <div class="minmax"><span id="legend-min">-</span><span id="legend-max">-</span></div>
   </div>
@@ -52,25 +54,36 @@
 (async function(){
   const CONFIG = {
     SHOW_GRATICULES: true,
-    GRATICULES_COLOR: 'rgba(0,0,0,0.2)',
-    LAND_COLOR: 'rgba(255,255,255,0.30)',
+    GRATICULES_COLOR: 'rgba(255,255,255,0.18)',  // 网格线（白、轻微透明）
     COUNTY_OPACITY: 0.70,
     ALT_BASE: 0.015,
     ALT_SELECT_MULT: 2.2,
     ALT_HOVER_MULT: 1.0,
     PALETTE: ['#f7fbff','#deebf7','#c6dbef','#9ecae1','#6baed6','#4292c6','#2171b5','#084594'],
-    HOVER_COLOR: 'rgba(255,255,255,0.85)'
+    LABEL_BG:'rgba(255,255,255,0.25)', LABEL_BORDER:'1px solid rgba(255,255,255,0.4)', LABEL_TEXT:'#1a1a1a',
+    HOVER_COLOR: 'rgba(255,255,255,0.85)',
+    GLOBE_WHITE_OPACITY: 0.10   // ← 球体白色不透明度（0.05~0.15建议）
   };
+  const CLEAR = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAuMBgYx2YscAAAAASUVORK5CYII=';
 
-  // 加载外部 JSON 数据
-  const [rows, period, countiesTopo, worldLand] = await Promise.all([
-    fetch('./county_values_latest.json').then(r=>r.json()),
-    fetch('./period.txt').then(r=>r.text()).catch(()=> 'Latest'),
-    fetch('./counties-10m.json').then(r=>r.json()),
-    fetch('./world_land_natural.json').then(r=>r.json())
-  ]);
+  function showErr(msg){console.error(msg);const el=document.createElement('div');el.className='err';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),8000);}
 
-  // DOM refs
+  // —— 加载外部 JSON（务必用 http 服务打开）
+  let rows, PERIOD='Latest', COUNTIES_TOPO, WORLD_LAND;
+  try{
+    const [v,p,c,w] = await Promise.all([
+      fetch('./county_values_latest.json').then(r=>r.json()),
+      fetch('./period.txt').then(r=>r.ok?r.text():'Latest').catch(()=> 'Latest'),
+      fetch('./counties-10m.json').then(r=>r.json()),
+      fetch('./world_land_natural.json').then(r=>r.json())
+    ]);
+    rows=v; PERIOD=(p||'Latest').trim(); COUNTIES_TOPO=c; WORLD_LAND=w;
+  }catch(e){ showErr('Failed to load JSON. Run: python3 -m http.server'); return; }
+
+  if (!rows?.length) { showErr('county_values_latest.json is empty'); return; }
+  if (!COUNTIES_TOPO?.objects?.counties) { showErr('Invalid counties-10m.json'); return; }
+
+  // —— DOM
   const metricSel = document.getElementById('metric');
   const statesSel = document.getElementById('states');
   const periodEl  = document.getElementById('period');
@@ -80,59 +93,97 @@
   const legendBar   = document.getElementById('legend-bar');
   const pinnedEl    = document.getElementById('pinned');
 
-  // 初始化下拉
+  // —— 下拉
   const metrics = Object.keys(rows[0]).filter(k=>!['FIPS','REGION','STATE_CODE'].includes(k));
   metricSel.innerHTML = metrics.map(m=>`<option value="${m}">${m.replaceAll('_',' ').toUpperCase()}</option>`).join('');
   metricSel.value = metrics.includes('MEDIAN_DOM') ? 'MEDIAN_DOM' : metrics[0];
+
   const states = Array.from(new Set(rows.map(r=>r.STATE_CODE))).sort();
   statesSel.innerHTML = `<option value="(All)">(All)</option>` + states.map(s=>`<option value="${s}">${s}</option>`).join('');
   statesSel.options[0].selected = true;
-  periodEl.textContent = `Period: ${period.trim()}`;
+  periodEl.textContent = `Period: ${PERIOD}`;
 
-  // 工具函数
+  // —— 工具函数
   const pad5 = s => String(s).padStart(5,'0');
-  const quantile = (sorted,p) => sorted[Math.floor((sorted.length-1)*p)];
-  const fmtVal = (metric,v)=>{
-    const n=Number(v); if(!Number.isFinite(n)) return 'No data';
+  const quantile = (sorted,p) => {
+    if (!sorted.length) return NaN;
+    const i = Math.min(sorted.length-1, Math.max(0, Math.floor((sorted.length-1)*p)));
+    return sorted[i];
+  };
+  function fmtVal(metric, v){
+    const n=Number(v);
+    if(!Number.isFinite(n)) return 'No data';
     if(metric.includes('PRICE')||metric.includes('PPSF')) return `$${n.toLocaleString()}`;
     if(metric==='MEDIAN_DOM') return `${Math.round(n)} days`;
     if(['AVG_SALE_TO_LIST','SOLD_ABOVE_LIST','PRICE_DROPS','OFF_MARKET_IN_TWO_WEEKS'].includes(metric)) return `${(n*100).toFixed(1)}%`;
     return n.toLocaleString();
-  };
+  }
 
-  // 初始化 globe
-  const globe = Globe({ rendererConfig:{alpha:true,antialias:true} })(document.getElementById('globe'))
+  // —— 初始化 globe（透明画布）
+  const globe = Globe({ rendererConfig:{ alpha:true, antialias:true } })(document.getElementById('globe'))
     .backgroundColor('rgba(0,0,0,0)')
     .pointOfView({lat:38,lng:-98,altitude:1.5});
+  window.addEventListener('resize', ()=>globe.width(window.innerWidth).height(window.innerHeight));
 
-  // 隐藏球体网格
-  setTimeout(()=>{
-    const scene = globe.scene();
-    const globeMesh = scene.children.find(o => o.material === globe.globeMaterial());
-    if (globeMesh) globeMesh.visible = false;
-  },300);
-
-  // 经纬网
-  if (typeof globe.showGraticules === 'function') globe.showGraticules(CONFIG.SHOW_GRATICULES);
+  // **白色几乎透明的球体 + 白色网格**
+  globe.globeImageUrl(CLEAR).bumpImageUrl(CLEAR); // 透明纹理，避免默认黑材质
+  globe.showAtmosphere(false);
+  if (typeof globe.showGraticules === 'function') globe.showGraticules(true);
   if (typeof globe.graticulesColor === 'function') globe.graticulesColor(CONFIG.GRATICULES_COLOR);
+  else if (typeof globe.graticuleColor === 'function') globe.graticuleColor(CONFIG.GRATICULES_COLOR);
 
-  // topo → geojson
-  const countiesGeo = topojson.feature(countiesTopo, countiesTopo.objects.counties);
-  const landPolys = (worldLand?.features||[]).map(f=>Object.assign({},f,{isLand:true}));
+  setTimeout(()=>{
+    const mat = globe.globeMaterial();
+    if (mat.color?.setStyle) mat.color.setStyle('#ffffff');      // 白色基色
+    if (mat.emissive?.setStyle) mat.emissive.setStyle('#000000'); // 不自发光
+    mat.transparent = true;
+    mat.opacity = CONFIG.GLOBE_WHITE_OPACITY;  // 几乎透明的白
+    mat.depthWrite = false;
 
+    const r = globe.renderer();
+    if (r.setClearAlpha) r.setClearAlpha(0);
+    r.setClearColor(0x000000, 0);
+    globe.scene().background = null;
+
+    // 柔和光照，避免发灰/发黑
+    const scene = globe.scene();
+    scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x101010, 0.35);
+    hemi.position.set(0, 1, 0);
+    scene.add(hemi);
+  }, 200);
+
+  globe.polygonsTransitionDuration(250);
+
+  // —— topo → geojson
+  const countiesGeo = topojson.feature(COUNTIES_TOPO, COUNTIES_TOPO.objects.counties);
+  const landPolys = (WORLD_LAND?.features||[]).map(f=>Object.assign({},f,{isLand:true}));
+
+  // —— 状态与样式
   const selectedFips = new Set(); let hoverId=null;
 
   function refreshStyles(){
     globe
-      .polygonCapColor(d => selectedFips.has(d.id)? d.__baseColor : (hoverId===d.id? CONFIG.HOVER_COLOR : d.__baseColor))
-      .polygonSideColor(d => selectedFips.has(d.id)? d.__baseColor : (hoverId===d.id? CONFIG.HOVER_COLOR : d.__baseColor))
-      .polygonStrokeColor(()=> 'transparent')
-      .polygonAltitude(d=>{
-        const a = d.__altBase||CONFIG.ALT_BASE;
-        if (selectedFips.has(d.id)) return a*CONFIG.ALT_SELECT_MULT;
-        if (hoverId===d.id) return a*CONFIG.ALT_HOVER_MULT;
+      .polygonCapColor(d => d.isLand ? 'rgba(255,255,255,0.30)'
+                           : selectedFips.has(d.id) ? d.__baseColor
+                           : (hoverId===d.id ? CONFIG.HOVER_COLOR : d.__baseColor))
+      .polygonSideColor(d => d.isLand ? 'rgba(255,255,255,0.30)'
+                           : (hoverId===d.id ? CONFIG.HOVER_COLOR : d.__baseColor))
+      .polygonStrokeColor(d => d.isLand ? 'rgba(0,0,0,0)' : 'transparent')
+      .polygonAltitude(d => {
+        if (d.isLand) return 0.005;
+        const a = d.__altBase || CONFIG.ALT_BASE;
+        if (selectedFips.has(d.id)) return a * CONFIG.ALT_SELECT_MULT;
+        if (hoverId===d.id) return a * CONFIG.ALT_HOVER_MULT;
         return a;
       });
+  }
+
+  function clearLegend(){
+    legendTitle.textContent = '-';
+    legendBar.style.background = 'none';
+    legendMin.textContent = '-';
+    legendMax.textContent = '-';
   }
 
   function updateData(){
@@ -141,52 +192,89 @@
     const all = chosen.includes('(All)');
 
     const byFips = Object.fromEntries(rows.map(r=>[pad5(r.FIPS),r]));
-    const vals = rows.filter(r=>all||chosen.includes(r.STATE_CODE))
-                     .map(r=>+r[metric]).filter(Number.isFinite).sort((a,b)=>a-b);
-    if (!vals.length) return;
-    const vmin=quantile(vals,0.05), vmax=quantile(vals,0.95);
-    const norm=v=>(v-vmin)/(vmax-vmin||1);
+    const vals = rows.filter(r=>all || chosen.includes(r.STATE_CODE))
+                     .map(r=>Number(r[metric])).filter(Number.isFinite).sort((a,b)=>a-b);
 
-    const dataFeats = countiesGeo.features.map(f=>{
+    if(!vals.length){
+      globe.polygonsData(landPolys);
+      clearLegend();
+      refreshStyles();
+      return;
+    }
+
+    const vmin = quantile(vals,0.05), vmax = quantile(vals,0.95);
+    const norm = v => (v - vmin)/(vmax - vmin || 1);
+
+    const PALETTE = Array.isArray(CONFIG.PALETTE)&&CONFIG.PALETTE.length
+      ? CONFIG.PALETTE
+      : ['#f7fbff','#deebf7','#c6dbef','#9ecae1','#6baed6','#4292c6','#2171b5','#084594'];
+
+    const dataFeats = countiesGeo.features.filter(f=>{
       const rec = byFips[pad5(f.id)];
-      if(!rec) return null;
-      const v = +rec[metric];
-      const idx = Number.isFinite(v)? Math.min(7,Math.floor(norm(v)*8)):0;
-      const hex=CONFIG.PALETTE[idx].slice(1);
-      const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
-      f.__baseColor=`rgba(${r},${g},${b},${CONFIG.COUNTY_OPACITY})`;
-      f.__altBase=CONFIG.ALT_BASE;
-      f.__county=rec.REGION; f.__state=rec.STATE_CODE; f.__value=fmtVal(metric,v);
-      f.__label=`<div><b>${f.__county}</b><br>${f.__state} — ${f.__value}</div>`;
-      return f;
-    }).filter(Boolean);
+      return !!rec && (all || chosen.includes(rec.STATE_CODE));
+    }).map(f=>{
+      const rec = byFips[pad5(f.id)];
+      const v = Number(rec?.[metric]);
 
-    globe.polygonsData([...landPolys,...dataFeats])
-         .polygonLabel(f=>f.isLand?null:f.__label);
+      const t = Number.isFinite(v) ? Math.max(0, Math.min(1, norm(v))) : 0;  // 夹紧到[0,1]
+      const idx = Math.min(PALETTE.length-1, Math.floor(t * PALETTE.length));
+      const hexColor = PALETTE[idx] || PALETTE[0];
+      const hex = String(hexColor).replace('#','');
+      const r = parseInt(hex.slice(0,2),16) || 0;
+      const g = parseInt(hex.slice(2,4),16) || 0;
+      const b = parseInt(hex.slice(4,6),16) || 0;
+
+      f.__baseColor = `rgba(${r}, ${g}, ${b}, ${CONFIG.COUNTY_OPACITY})`;
+      f.__altBase   = CONFIG.ALT_BASE;
+      f.__county    = rec?.REGION ?? f.properties?.name ?? 'N/A';
+      f.__state     = rec?.STATE_CODE ?? '';
+      f.__value     = fmtVal(metric, v);
+      f.__label     = `<div style="background:${CONFIG.LABEL_BG}; border:${CONFIG.LABEL_BORDER}; padding:12px 16px; border-radius:12px; font:13px/1.4 Inter,system-ui; color:${CONFIG.LABEL_TEXT};">
+        <b>${f.__county}</b><br>${f.__state} — ${f.__value}</div>`;
+      return f;
+    });
+
+    globe.polygonsData([...landPolys, ...dataFeats])
+         .polygonLabel(f=>f.isLand?null:(f.__label || `County ${f.id}`));
 
     legendTitle.textContent = metric.replaceAll('_',' ').toUpperCase();
-    legendBar.style.background=`linear-gradient(90deg,${CONFIG.PALETTE.join(',')})`;
-    legendMin.textContent=fmtVal(metric,vmin);
-    legendMax.textContent=fmtVal(metric,vmax);
+    legendBar.style.background = `linear-gradient(90deg, ${PALETTE.join(',')})`;
+    legendMin.textContent = fmtVal(metric, vmin);
+    legendMax.textContent = fmtVal(metric, vmax);
+
     refreshStyles();
   }
 
-  globe.onPolygonHover(f=>{hoverId=f?f.id:null;refreshStyles();});
+  globe.onPolygonHover(f=>{ hoverId = (f && !f.isLand) ? f.id : null; refreshStyles(); });
   globe.onPolygonClick(f=>{
-    if(!f) return;
-    selectedFips.has(f.id)?selectedFips.delete(f.id):selectedFips.add(f.id);
+    if(!f || f.isLand) return;
+    selectedFips.has(f.id) ? selectedFips.delete(f.id) : selectedFips.add(f.id);
     refreshStyles();
-    pinnedEl.innerHTML=[...selectedFips].map(id=>{
-      const d=globe.polygonsData().find(x=>x.id===id);
-      return `<div class="pin"><b>${d.__county}</b><br><span>${d.__state} — ${d.__value}</span></div>`;
-    }).join('');
-    pinnedEl.style.display=selectedFips.size?'block':'none';
+    const items = (globe.polygonsData()||[]).filter(x=>!x.isLand && selectedFips.has(x.id))
+      .map(x=>`<div class="pin"><b>${x.__county}</b><br><span>${x.__state} — ${x.__value}</span></div>`).join('');
+    pinnedEl.innerHTML = items; pinnedEl.style.display = selectedFips.size ? 'block' : 'none';
   });
 
-  metricSel.addEventListener('change',updateData);
-  statesSel.addEventListener('change',updateData);
+  // (All) 选择约束
+  statesSel.addEventListener('change', () => {
+    const opts = Array.from(statesSel.options);
+    const allOpt = opts.find(o => o.value === '(All)');
+    const chosen = Array.from(statesSel.selectedOptions).map(o => o.value);
+    if (chosen.length > 1 && chosen.includes('(All)')) allOpt.selected = false;
+    if (chosen.length === 0) allOpt.selected = true;
+    updateData();
+  });
+
+  // Reset：清县选 & 州回到 (All)
   document.getElementById('resetSel').addEventListener('click',()=>{
-    selectedFips.clear();refreshStyles();pinnedEl.style.display='none';updateData();
+    selectedFips.clear();
+    const opts = Array.from(statesSel.options);
+    opts.forEach(o => (o.selected = false));
+    const allOpt = opts.find(o => o.value === '(All)');
+    if (allOpt) allOpt.selected = true;
+    pinnedEl.style.display='none';
+    refreshStyles();
+    updateData();
   });
 
   updateData();
