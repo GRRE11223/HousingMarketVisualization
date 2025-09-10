@@ -1,56 +1,65 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>US County Housing — Cartopy Globe (Config First)</title>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>US County Housing — Cartopy Globe (Transparent)</title>
 <style>
   :root{
-    --bg: transparent;            
-    --glass: rgba(255,255,255,.25);
-    --glass-border: rgba(255,255,255,.4);
+    --panel-bg: rgba(255,255,255,0.25);
+    --panel-border: rgba(255,255,255,0.4);
     --text: #1a1a1a;
     --muted:#666;
   }
-  html,body{height:100%; margin:0; background:var(--bg);}
-  body{font-family:Inter,system-ui,-apple-system,Segoe UI,Arial; color:var(--text); overflow:hidden;}
+  html,body{height:100%;margin:0;background:transparent;}
+  body{font-family: Inter, system-ui, -apple-system, Segoe UI, Arial; color:var(--text); overflow:hidden;}
+  #globe{position:fixed; inset:0; background:transparent;}
+  /* 强制 three.js canvas 透明 */
+  #globe canvas{background:transparent !important;}
 
   .panel{
     position:fixed; left:20px; top:20px; z-index:10;
-    background:var(--glass); border:1px solid var(--glass-border); backdrop-filter:blur(30px) saturate(200%);
-    box-shadow:0 8px 32px rgba(0,0,0,.1), 0 1px 0 rgba(255,255,255,.6) inset;
-    border-radius:16px; padding:20px; width:280px; max-height:80vh; overflow:auto;
+    width:280px; max-height:80vh; overflow:auto;
+    background:var(--panel-bg); border:1px solid var(--panel-border);
+    backdrop-filter: blur(30px) saturate(200%);
+    box-shadow: 0 8px 32px rgba(0,0,0,.1), 0 1px 0 rgba(255,255,255,.6) inset;
+    border-radius:16px; padding:20px;
   }
-  .sec{ margin-bottom:20px; }
-  .legend-title{ font-weight:700; margin-bottom:8px; }
-  .bar{height:12px; border-radius:8px; margin:8px 0;}
-  .minmax{display:flex; justify-content:space-between; color:var(--muted); font-size:12px;}
-  label{font-size:13px; color:var(--muted); display:block; margin:0 0 6px;}
+  .section{margin-bottom:20px;}
+  label{display:block; font-size:13px; color:var(--muted); margin:0 0 6px;}
   select,button{
-    width:100%; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.4);
-    background:rgba(255,255,255,.3); color:var(--text); font-size:13px; margin-bottom:12px; backdrop-filter:blur(15px);
+    width:100%; padding:10px 12px; border-radius:10px;
+    border:1px solid var(--panel-border); background:rgba(255,255,255,.3);
+    color:var(--text); font-size:13px; margin-bottom:12px; backdrop-filter: blur(15px);
   }
   select[multiple]{min-height:90px;}
-  #globe{ position:fixed; inset:0; background:transparent; }
+  .legend-title{font-weight:700;margin-bottom:8px;}
+  .bar{height:12px;border-radius:8px;margin:8px 0;}
+  .minmax{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;}
   .err{position:fixed; right:20px; bottom:20px; background:#7f1d1d; color:#fee2e2; padding:10px 12px; border-radius:10px; border:1px solid #ef4444}
+  .pin{border:1px solid var(--panel-border);border-radius:12px;padding:10px 12px;margin:6px 0;background:rgba(255,255,255,.2)}
 </style>
 </head>
 <body>
+
+  <!-- 控制面板 -->
   <div class="panel">
-    <div class="sec">
+    <div class="section">
       <div id="legend-title" class="legend-title"></div>
       <div class="bar" id="legend-bar"></div>
       <div class="minmax"><span id="legend-min">-</span><span id="legend-max">-</span></div>
     </div>
-    <div class="sec">
+    <div class="section">
       <label for="metric">Metric</label>
       <select id="metric"></select>
+
       <label for="states">State</label>
       <select id="states" multiple></select>
+
       <button id="resetSel">Reset Selection</button>
-      <div id="period" style="color:#888; font-size:12px;"></div>
+      <div id="period" style="color:#888;font-size:12px;"></div>
     </div>
-    <div class="sec">
+    <div class="section">
       <div id="pinned" style="display:none"></div>
     </div>
   </div>
@@ -62,80 +71,61 @@
   <script src="https://unpkg.com/globe.gl@2.34.5/dist/globe.gl.min.js"></script>
   <script src="https://unpkg.com/topojson-client@3"></script>
 
-  <!-- ====== 可自定义设置：全部在这里改 ====== -->
   <script>
-    const CONFIG = {
-      // 页面 & 画布
-      PAGE_BACKGROUND: 'transparent',       // 整页背景
-      GLOBE_BACKGROUND: 'rgba(0,0,0,0)',    // 球画布背景
+  (async function(){
 
-      // 球体材质（海洋）
-      GLOBE_TRANSPARENT: true,
-      GLOBE_OPACITY: 0.0,                   // 0=完全透明海洋
+    /* ================= CONFIG（集中可改） ================= */
+    const CONFIG = {
+      // 画布与球体
+      BACKGROUND: 'rgba(0,0,0,0)',   // 画布背景：透明
+      GLOBE_OPACITY: 0,              // 球面材质透明度（0 = 完全透明）
       SHOW_GRATICULES: true,
       GRATICULES_COLOR: 'rgba(0,0,0,0.08)',
 
-      // 底图：陆地（作为 polygonsData 的 isLand）
+      // 陆地（basemap）
       LAND_COLOR: 'rgba(255,255,255,0.30)',
-      LAND_BORDER_COLOR: 'rgba(0,0,0,0)',   // 需要边线就改成 'rgba(0,0,0,0.35)'
+      LAND_SIDE:  'rgba(255,255,255,0.30)',
+      LAND_STROKE:'rgba(0,0,0,0)',
       LAND_ALTITUDE: 0.005,
 
-      // 县区（数据）外观
-      COUNTY_ALTITUDE: 0.015,
-      COUNTY_POLYGON_OPACITY: 0.70,
+      // 县级多边形
+      COUNTY_OPACITY: 0.70,
+      ALT_BASE: 0.015,
+      ALT_HOVER_MULT: 1.0,  // 悬浮不抬升
+      ALT_SELECT_MULT: 2.2, // 选中抬升倍数
+
+      // 颜色带
       PALETTE: ['#f7fbff','#deebf7','#c6dbef','#9ecae1','#6baed6','#4292c6','#2171b5','#084594'],
       HOVER_COLOR: 'rgba(255,255,255,0.85)',
-      SELECT_STROKE: 'rgba(0,122,255,0.9)',
-      HOVER_STROKE:  'rgba(0,122,255,0.7)',
-      ALT_HOVER_MULT: 1.6,
-      ALT_SELECT_MULT: 2.2,
 
-      // 气泡
+      // label 样式
       LABEL_BG: 'rgba(255,255,255,0.25)',
       LABEL_BORDER: '1px solid rgba(255,255,255,0.4)',
       LABEL_TEXT: '#1a1a1a',
 
-      // 视角
-      POV: { lat: 38, lng: -98, altitude: 1.5 },
-
-      // 可选：当 world_land_natural.json 缺失时，是否静默继续
-      SILENT_MISSING_WORLD_LAND: true
+      // 过渡动画（仅首渲染/切换数据时）
+      TRANSITION_MS: 250
     };
+    /* ==================================================== */
 
-    // 把整页背景同步为 CONFIG
-    document.documentElement.style.setProperty('--bg', CONFIG.PAGE_BACKGROUND);
-  </script>
-  <!-- ============ 以上都是你常改的 ============ -->
+    function showErr(msg){ console.error(msg); const el=document.createElement('div'); el.className='err'; el.textContent=msg; document.body.appendChild(el); setTimeout(()=>el.remove(),8000); }
 
-  <script>
-  (async function() {
-    function err(msg) {
-      console.error(msg);
-      const el=document.createElement('div'); el.className='err'; el.textContent=msg;
-      document.body.appendChild(el); setTimeout(()=>el.remove(),8000);
-    }
-
-    // 1) 运行时加载同目录 JSON
-    let rows, PERIOD='Latest', COUNTIES_TOPO, WORLD_LAND=null;
-    try {
-      const [v,p,c] = await Promise.all([
+    // 运行时从同目录加载数据
+    let rows, PERIOD='Latest', COUNTIES_TOPO, WORLD_LAND;
+    try{
+      const [v,p,c,w] = await Promise.all([
         fetch('./county_values_latest.json').then(r=>r.json()),
-        fetch('./period.txt').then(r=>r.ok?r.text():'Latest').catch(_=>'Latest'),
-        fetch('./counties-10m.json').then(r=>r.json())
+        fetch('./period.txt').then(r=>r.ok?r.text():'Latest').catch(()=> 'Latest'),
+        fetch('./counties-10m.json').then(r=>r.json()),
+        fetch('./world_land_natural.json').then(r=>r.json())
       ]);
-      rows = v; PERIOD = (p||'Latest').trim(); COUNTIES_TOPO = c;
-    } catch(e) {
-      err('Failed to load required JSONs: county_values_latest.json / counties-10m.json / period.txt');
+      rows = v; PERIOD = (p||'Latest').trim(); COUNTIES_TOPO = c; WORLD_LAND = w;
+    }catch(e){
+      showErr('Failed to load JSON files. Ensure JSONs are next to index.html');
       return;
     }
-    // 可选世界陆地
-    try {
-      WORLD_LAND = await fetch('./world_land_natural.json').then(r=> r.ok ? r.json() : null);
-    } catch(e) {
-      if (!CONFIG.SILENT_MISSING_WORLD_LAND) err('world_land_natural.json missing — land basemap disabled');
-    }
 
-    // 2) 填充下拉
+    // DOM refs
     const metricSel = document.getElementById('metric');
     const statesSel = document.getElementById('states');
     const periodEl  = document.getElementById('period');
@@ -145,6 +135,7 @@
     const legendBar   = document.getElementById('legend-bar');
     const pinnedEl    = document.getElementById('pinned');
 
+    // 下拉初始化
     const metrics = rows.length ? Object.keys(rows[0]).filter(k=>!['FIPS','REGION','STATE_CODE'].includes(k)) : [];
     metricSel.innerHTML = metrics.map(m=>`<option value="${m}">${m.replaceAll('_',' ').toUpperCase()}</option>`).join('');
     if (metrics.includes('MEDIAN_DOM')) metricSel.value = 'MEDIAN_DOM';
@@ -154,30 +145,7 @@
     if (statesSel.options.length) statesSel.options[0].selected = true;
     periodEl.textContent = `Period: ${PERIOD}`;
 
-    // 3) 球
-    const globe = Globe()(document.getElementById('globe'))
-      .backgroundColor(CONFIG.GLOBE_BACKGROUND)
-      .width(window.innerWidth).height(window.innerHeight)
-      .pointOfView(CONFIG.POV);
-
-    setTimeout(()=>{
-      globe.globeImageUrl(null).bumpImageUrl(null).showAtmosphere(false)
-           .showGraticules(!!CONFIG.SHOW_GRATICULES)
-           .graticulesColor(CONFIG.GRATICULES_COLOR);
-      const mat = globe.globeMaterial();
-      mat.transparent = !!CONFIG.GLOBE_TRANSPARENT;
-      mat.opacity = Number(CONFIG.GLOBE_OPACITY) || 0;
-      mat.depthWrite = false;
-      globe.polygonsTransitionDuration(400);
-    }, 300);
-    window.addEventListener('resize', ()=>globe.width(window.innerWidth).height(window.innerHeight));
-
-    // 4) topo -> geojson
-    const countiesGeo = topojson.feature(COUNTIES_TOPO, COUNTIES_TOPO.objects.counties);
-    const worldLand   = WORLD_LAND; // 可能为 null
-
-    // 5) 渲染
-    const selectedFips = new Set(); let hoverId=null;
+    // 主题辅助
     function pad5(s){return String(s).padStart(5,'0');}
     function quantile(sorted,p){return sorted.length? sorted[Math.floor((sorted.length-1)*p)] : NaN;}
     function fmtVal(metric, v){
@@ -188,12 +156,56 @@
       if(['AVG_SALE_TO_LIST','SOLD_ABOVE_LIST','PRICE_DROPS','OFF_MARKET_IN_TWO_WEEKS'].includes(metric)) return `${(n*100).toFixed(1)}%`;
       return n.toLocaleString();
     }
-    function hexToRgba(hex, a){
-      const h = hex.replace('#',''); const r=parseInt(h.slice(0,2),16), g=parseInt(h.slice(2,4),16), b=parseInt(h.slice(4,6),16);
-      return `rgba(${r}, ${g}, ${b}, ${a})`;
+
+    // 初始化 Globe（透明画布 + 透明球体）
+    const globe = Globe()(document.getElementById('globe'))
+      .backgroundColor(CONFIG.BACKGROUND)
+      .width(window.innerWidth).height(window.innerHeight)
+      .pointOfView({ lat: 38, lng: -98, altitude: 1.5 });
+    window.addEventListener('resize', ()=>globe.width(window.innerWidth).height(window.innerHeight));
+
+    // 透明球体&经纬网
+    setTimeout(()=>{
+      globe.globeImageUrl(null).bumpImageUrl(null).showAtmosphere(false)
+           .showGraticules(CONFIG.SHOW_GRATICULES)
+           .graticulesColor(CONFIG.GRATICULES_COLOR)
+           .polygonsTransitionDuration(CONFIG.TRANSITION_MS);
+
+      const mat = globe.globeMaterial();
+      mat.transparent = true;
+      mat.opacity = CONFIG.GLOBE_OPACITY; // 0 = 完全透明
+      mat.depthWrite = false;
+    }, 150);
+
+    // topo -> geojson（只做一次）
+    const countiesGeo = topojson.feature(COUNTIES_TOPO, COUNTIES_TOPO.objects.counties);
+    const landPolysConst = (WORLD_LAND?.features || []).map(f => Object.assign({}, f, {isLand:true}));
+
+    // 状态
+    const selectedFips = new Set(); let hoverId=null;
+
+    // 只负责样式刷新（不重建数据）
+    function refreshStyles(){
+      globe
+        .polygonCapColor(d => {
+          if (d.isLand) return CONFIG.LAND_COLOR;
+          if (selectedFips.has(d.id)) return d.__baseColor;
+          if (hoverId === d.id) return CONFIG.HOVER_COLOR;
+          return d.__baseColor;
+        })
+        .polygonSideColor(d => d.isLand ? CONFIG.LAND_SIDE : (hoverId===d.id ? CONFIG.HOVER_COLOR : d.__baseColor))
+        .polygonStrokeColor(d => d.isLand ? CONFIG.LAND_STROKE : 'transparent')
+        .polygonAltitude(d => {
+          if (d.isLand) return CONFIG.LAND_ALTITUDE;
+          const a = d.__altBase || CONFIG.ALT_BASE;
+          if (selectedFips.has(d.id)) return a * CONFIG.ALT_SELECT_MULT;
+          if (hoverId===d.id) return a * CONFIG.ALT_HOVER_MULT;
+          return a;
+        });
     }
 
-    function update() {
+    // 只在 metric / states 改变时重建（和首次）
+    function updateData(){
       const metric = metricSel.value;
       const chosen = Array.from(statesSel.selectedOptions).map(o=>o.value);
       const all = chosen.includes('(All)');
@@ -204,6 +216,7 @@
       const vals = rows.filter(r=>all || chosen.includes(r.STATE_CODE))
                        .map(r=>Number(r[metric])).filter(Number.isFinite).sort((a,b)=>a-b);
       if(!vals.length) return;
+
       const vmin = quantile(vals,0.05), vmax = quantile(vals,0.95);
       const norm = v => (v - vmin)/(vmax - vmin || 1);
 
@@ -213,59 +226,65 @@
       }).map(f=>{
         const rec = byFips[pad5(f.id)];
         const v = Number(rec?.[metric]);
-        const idx = Number.isFinite(v) ? Math.min(CONFIG.PALETTE.length-1, Math.floor(Math.max(0,Math.min(1,norm(v)))*CONFIG.PALETTE.length)) : 0;
-        f.__baseColor = hexToRgba(CONFIG.PALETTE[idx], CONFIG.COUNTY_POLYGON_OPACITY);
-        f.__altBase = CONFIG.COUNTY_ALTITUDE;
+        const idx = Number.isFinite(v) ? Math.min(7, Math.floor(Math.max(0,Math.min(1,norm(v)))*8)) : 0;
+        const hex = CONFIG.PALETTE[idx].replace('#','');
+        const r = parseInt(hex.slice(0,2),16), g=parseInt(hex.slice(2,4),16), b=parseInt(hex.slice(4,6),16);
+        f.__baseColor = `rgba(${r}, ${g}, ${b}, ${CONFIG.COUNTY_OPACITY})`;
+        f.__altBase = CONFIG.ALT_BASE;
         f.__county = rec?.REGION ?? f.properties?.name ?? 'N/A';
         f.__state  = rec?.STATE_CODE ?? '';
         f.__value  = fmtVal(metric, v);
         f.__label  = `<div style="background:${CONFIG.LABEL_BG}; border:${CONFIG.LABEL_BORDER}; padding:12px 16px; border-radius:12px; font:13px/1.4 Inter,system-ui; color:${CONFIG.LABEL_TEXT};">
-          <b>${f.__county}</b><br>${f.__state} — ${f.__value}<br><span style="color:#666; font-size:11px;">${PERIOD} • ${metric.replaceAll('_',' ').toUpperCase()}</span>
+          <b>${f.__county}</b><br>${f.__state} — ${f.__value}<br>
+          <span style="color:#666; font-size:11px;">${PERIOD} • ${metric.replaceAll('_',' ').toUpperCase()}</span>
         </div>`;
         return f;
       });
 
-      const landFeats = (worldLand?.features || []).map(f=>Object.assign({}, f, {isLand:true}));
-      const allPolys = [...landFeats, ...dataFeats];
+      // 合并：先放静态的 land（不变），再放 county 数据
+      const allPolys = [...landPolysConst, ...dataFeats];
 
-      globe.polygonsData(allPolys)
-        .polygonCapColor(d=> d.isLand ? CONFIG.LAND_COLOR
-                           : (selectedFips.has(d.id) ? d.__baseColor
-                           : (hoverId===d.id ? CONFIG.HOVER_COLOR : d.__baseColor)))
-        .polygonSideColor(d=> d.isLand ? CONFIG.LAND_COLOR : (hoverId===d.id?CONFIG.HOVER_COLOR:d.__baseColor))
-        .polygonStrokeColor(d=> d.isLand ? CONFIG.LAND_BORDER_COLOR : 'transparent')
-        .polygonAltitude(d=>{
-          if(d.isLand) return CONFIG.LAND_ALTITUDE;
-          const a=d.__altBase||CONFIG.COUNTY_ALTITUDE;
-          if(selectedFips.has(d.id)) return a*CONFIG.ALT_SELECT_MULT;
-          if(hoverId===d.id) return a; return a;
-        })
-        .polygonLabel(f => f.isLand ? null : (f.__label || `County ${f.id}`));
+      globe
+        .polygonsData(allPolys)
+        .polygonLabel(f => f.isLand ? null : (f.__label || `County ${f.id}`))
+        .polygonsTransitionDuration(CONFIG.TRANSITION_MS);
 
+      // 图例
       legendTitle.textContent = metric.replaceAll('_',' ').toUpperCase();
       legendBar.style.background = `linear-gradient(90deg, ${CONFIG.PALETTE.join(',')})`;
       legendMin.textContent = fmtVal(metric, vmin);
       legendMax.textContent = fmtVal(metric, vmax);
+
+      // 新数据后刷新样式
+      refreshStyles();
+
+      // 数据稳定后，关闭过渡减少后续 hover 帧动画
+      setTimeout(()=>globe.polygonsTransitionDuration(0), CONFIG.TRANSITION_MS+50);
     }
 
-    globe.onPolygonHover(f=>{ hoverId = (f && !f.isLand) ? f.id : null; update(); });
-    globe.onPolygonClick(f=>{
+    // 交互：只改样式，不喂数据
+    globe.onPolygonHover(f => { hoverId = (f && !f.isLand) ? f.id : null; refreshStyles(); });
+    globe.onPolygonClick(f => {
       if(!f || f.isLand) return;
-      if(selectedFips.has(f.id)) selectedFips.delete(f.id); else selectedFips.add(f.id);
-      update();
-      const data = (globe.polygonsData()||[]).filter(x=>!x.isLand)
-        .filter(x=>selectedFips.has(x.id))
-        .map(x=>`<div style="border:1px solid rgba(255,255,255,.4);border-radius:12px;padding:10px 12px;margin:6px 0;background:rgba(255,255,255,.2)"><b>${x.__county}</b><br><span style="color:#666">${x.__state} — ${x.__value}</span></div>`).join('');
-      const p = document.getElementById('pinned');
-      p.innerHTML = data;
-      p.style.display = selectedFips.size ? 'block':'none';
+      selectedFips.has(f.id) ? selectedFips.delete(f.id) : selectedFips.add(f.id);
+      refreshStyles();
+      // pinned 列表
+      const data = (globe.polygonsData()||[])
+        .filter(x=>!x.isLand && selectedFips.has(x.id))
+        .map(x=>`<div class="pin"><b>${x.__county}</b><br><span style="color:#666">${x.__state} — ${x.__value}</span></div>`).join('');
+      pinnedEl.innerHTML = data;
+      pinnedEl.style.display = selectedFips.size ? 'block':'none';
     });
 
-    document.getElementById('resetSel').addEventListener('click',()=>{ selectedFips.clear(); update(); document.getElementById('pinned').style.display='none'; });
-    document.getElementById('metric').addEventListener('change', update);
-    document.getElementById('states').addEventListener('change', update);
+    document.getElementById('resetSel').addEventListener('click',()=>{
+      selectedFips.clear(); refreshStyles(); pinnedEl.style.display='none';
+    });
+    metricSel.addEventListener('change', updateData);
+    statesSel.addEventListener('change', updateData);
 
-    update(); // 首次渲染
+    // 初次渲染
+    updateData();
+
   })();
   </script>
 </body>
