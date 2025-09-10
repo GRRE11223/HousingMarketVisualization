@@ -7,22 +7,61 @@
 <style>
   html,body{height:100%;margin:0;background:transparent;}
   body{font-family:Inter,system-ui,-apple-system,Segoe UI,Arial;color:#1a1a1a;overflow:hidden;}
-  #globe{position:fixed; inset:0; background:transparent;}
+
+  /* 画布容器：位置由 JS 动态计算，left/top 表示“中心点” */
+  #globe{
+    position:fixed;
+    transform:translate(-50%, -50%);
+    background:transparent;
+  }
   #globe canvas{background:transparent !important;}
 
-  .panel{position:fixed;left:20px;top:20px;z-index:10;width:280px;max-height:80vh;overflow:auto;
-         background:rgba(255,255,255,.25);border:1px solid rgba(255,255,255,.4);backdrop-filter:blur(30px) saturate(200%);
-         box-shadow:0 8px 32px rgba(0,0,0,.1),0 1px 0 rgba(255,255,255,.6) inset;border-radius:16px;padding:20px;}
+  /* 左侧控制面板 */
+  .panel{
+    position:fixed;left:20px;top:20px;z-index:10;width:280px;max-height:80vh;overflow:auto;
+    background:transparent;border:none;padding:20px;
+  }
   .section{margin-bottom:20px;}
   label{display:block;font-size:13px;color:#666;margin:0 0 6px;}
-  select,button{width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.4);
-                background:rgba(255,255,255,.3);color:#1a1a1a;font-size:13px;margin-bottom:12px;backdrop-filter:blur(15px);}
+  select,button{
+    width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.4);
+    background:rgba(255,255,255,.3);color:#1a1a1a;font-size:13px;margin-bottom:12px;backdrop-filter:blur(15px);
+  }
   select[multiple]{min-height:90px;}
   .legend-title{font-weight:700;margin-bottom:8px;}
   .bar{height:12px;border-radius:8px;margin:8px 0;}
   .minmax{display:flex;justify-content:space-between;color:#666;font-size:12px;}
   .pin{border:1px solid rgba(255,255,255,.4);border-radius:12px;padding:10px 12px;margin:6px 0;background:rgba(255,255,255,.2)}
   .err{position:fixed;right:20px;bottom:20px;background:#7f1d1d;color:#fee2e2;padding:10px 12px;border-radius:10px;border:1px solid #ef4444}
+  
+  .zoom-ctrl{
+    display:inline-flex; gap:6px; align-items:center; margin-top:12px;
+  }
+  .zoom-ctrl button{
+    width:40px; height:40px; border-radius:12px; border:none;
+    background:linear-gradient(135deg, rgba(255,255,255,0.9), rgba(255,255,255,0.7));
+    backdrop-filter:blur(15px) saturate(180%);
+    font-size:20px; font-weight:600; line-height:1; color:#2d3748; cursor:pointer;
+    box-shadow:0 4px 12px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.8);
+    transition:all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    position:relative; overflow:hidden;
+  }
+  .zoom-ctrl button::before{
+    content:''; position:absolute; top:0; left:0; right:0; bottom:0;
+    background:linear-gradient(135deg, rgba(255,255,255,0.2), transparent);
+    opacity:0; transition:opacity 0.2s ease;
+  }
+  .zoom-ctrl button:hover{ 
+    background:linear-gradient(135deg, rgba(255,255,255,0.95), rgba(255,255,255,0.8));
+    box-shadow:0 6px 20px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.9);
+    transform:translateY(-1px);
+  }
+  .zoom-ctrl button:hover::before{ opacity:1; }
+  .zoom-ctrl button:active{ 
+    transform:translateY(0) scale(0.98);
+    box-shadow:0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.6);
+  }
+  .zoom-ctrl button:focus{ outline:none; box-shadow:0 0 0 3px rgba(59, 130, 246, 0.3); }
 </style>
 </head>
 <body>
@@ -40,6 +79,11 @@
     <select id="states" multiple></select>
     <button id="resetSel">Reset Selection</button>
     <div id="period" style="color:#888;font-size:12px;"></div>
+    <div class="zoom-ctrl">
+      <button id="zoomIn" aria-label="Zoom in">+</button>
+      <button id="zoomOut" aria-label="Zoom out">−</button>
+      <button id="zoomReset" aria-label="Reset">⟳</button>
+    </div>
   </div>
   <div class="section"><div id="pinned" style="display:none"></div></div>
 </div>
@@ -54,7 +98,7 @@
 (async function(){
   const CONFIG = {
     SHOW_GRATICULES: true,
-    GRATICULES_COLOR: 'rgba(255,255,255,0.18)',  // 网格线（白、轻微透明）
+    GRATICULES_COLOR: 'rgba(200,200,200,0.25)',
     COUNTY_OPACITY: 0.70,
     ALT_BASE: 0.015,
     ALT_SELECT_MULT: 2.2,
@@ -62,13 +106,13 @@
     PALETTE: ['#f7fbff','#deebf7','#c6dbef','#9ecae1','#6baed6','#4292c6','#2171b5','#084594'],
     LABEL_BG:'rgba(255,255,255,0.25)', LABEL_BORDER:'1px solid rgba(255,255,255,0.4)', LABEL_TEXT:'#1a1a1a',
     HOVER_COLOR: 'rgba(255,255,255,0.85)',
-    GLOBE_WHITE_OPACITY: 0.10   // ← 球体白色不透明度（0.05~0.15建议）
+    GLOBE_WHITE_OPACITY: 0.10
   };
   const CLEAR = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAuMBgYx2YscAAAAASUVORK5CYII=';
 
   function showErr(msg){console.error(msg);const el=document.createElement('div');el.className='err';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),8000);}
 
-  // —— 加载外部 JSON（务必用 http 服务打开）
+  // 加载数据
   let rows, PERIOD='Latest', COUNTIES_TOPO, WORLD_LAND;
   try{
     const [v,p,c,w] = await Promise.all([
@@ -83,7 +127,7 @@
   if (!rows?.length) { showErr('county_values_latest.json is empty'); return; }
   if (!COUNTIES_TOPO?.objects?.counties) { showErr('Invalid counties-10m.json'); return; }
 
-  // —— DOM
+  // DOM
   const metricSel = document.getElementById('metric');
   const statesSel = document.getElementById('states');
   const periodEl  = document.getElementById('period');
@@ -92,8 +136,10 @@
   const legendMax   = document.getElementById('legend-max');
   const legendBar   = document.getElementById('legend-bar');
   const pinnedEl    = document.getElementById('pinned');
+  const globeEl     = document.getElementById('globe');
+  const panelEl     = document.querySelector('.panel');
 
-  // —— 下拉
+  // 下拉
   const metrics = Object.keys(rows[0]).filter(k=>!['FIPS','REGION','STATE_CODE'].includes(k));
   metricSel.innerHTML = metrics.map(m=>`<option value="${m}">${m.replaceAll('_',' ').toUpperCase()}</option>`).join('');
   metricSel.value = metrics.includes('MEDIAN_DOM') ? 'MEDIAN_DOM' : metrics[0];
@@ -103,7 +149,62 @@
   statesSel.options[0].selected = true;
   periodEl.textContent = `Period: ${PERIOD}`;
 
-  // —— 工具函数
+  // 各州地理中心坐标
+  const STATE_CENTERS = {
+    'AK': {lat: 64.2008, lng: -149.4937}, // Alaska
+    'AL': {lat: 32.806671, lng: -86.791130}, // Alabama
+    'AR': {lat: 34.969704, lng: -92.373123}, // Arkansas
+    'AZ': {lat: 33.729759, lng: -111.431221}, // Arizona
+    'CA': {lat: 36.116203, lng: -119.681564}, // California
+    'CO': {lat: 39.059811, lng: -105.311104}, // Colorado
+    'CT': {lat: 41.597782, lng: -72.755371}, // Connecticut
+    'DC': {lat: 38.907192, lng: -77.036873}, // District of Columbia
+    'DE': {lat: 39.318523, lng: -75.507141}, // Delaware
+    'FL': {lat: 27.766279, lng: -81.686783}, // Florida
+    'GA': {lat: 33.040619, lng: -83.643074}, // Georgia
+    'HI': {lat: 21.094318, lng: -157.498337}, // Hawaii
+    'IA': {lat: 42.011539, lng: -93.210526}, // Iowa
+    'ID': {lat: 44.240459, lng: -114.478828}, // Idaho
+    'IL': {lat: 40.349457, lng: -88.986137}, // Illinois
+    'IN': {lat: 39.849426, lng: -86.258278}, // Indiana
+    'KS': {lat: 38.526600, lng: -96.726486}, // Kansas
+    'KY': {lat: 37.668140, lng: -84.670067}, // Kentucky
+    'LA': {lat: 31.169546, lng: -91.867805}, // Louisiana
+    'MA': {lat: 42.230171, lng: -71.530106}, // Massachusetts
+    'MD': {lat: 39.063946, lng: -76.802101}, // Maryland
+    'ME': {lat: 44.323535, lng: -69.765261}, // Maine
+    'MI': {lat: 43.326618, lng: -84.536095}, // Michigan
+    'MN': {lat: 45.694454, lng: -93.900192}, // Minnesota
+    'MO': {lat: 38.456085, lng: -92.288368}, // Missouri
+    'MS': {lat: 32.741646, lng: -89.678696}, // Mississippi
+    'MT': {lat: 47.052952, lng: -110.454353}, // Montana
+    'NC': {lat: 35.630066, lng: -79.806419}, // North Carolina
+    'ND': {lat: 47.528912, lng: -99.784012}, // North Dakota
+    'NE': {lat: 41.125370, lng: -98.268082}, // Nebraska
+    'NH': {lat: 43.452492, lng: -71.563896}, // New Hampshire
+    'NJ': {lat: 40.298904, lng: -74.521011}, // New Jersey
+    'NM': {lat: 34.840515, lng: -106.248482}, // New Mexico
+    'NV': {lat: 38.313515, lng: -117.055374}, // Nevada
+    'NY': {lat: 42.165726, lng: -74.948051}, // New York
+    'OH': {lat: 40.388783, lng: -82.764915}, // Ohio
+    'OK': {lat: 35.565342, lng: -96.928917}, // Oklahoma
+    'OR': {lat: 44.572021, lng: -122.070938}, // Oregon
+    'PA': {lat: 40.590752, lng: -77.209755}, // Pennsylvania
+    'RI': {lat: 41.680893, lng: -71.51178}, // Rhode Island
+    'SC': {lat: 33.856892, lng: -80.945007}, // South Carolina
+    'SD': {lat: 44.299782, lng: -99.438828}, // South Dakota
+    'TN': {lat: 35.747845, lng: -86.692345}, // Tennessee
+    'TX': {lat: 31.054487, lng: -97.563461}, // Texas
+    'UT': {lat: 40.150032, lng: -111.862434}, // Utah
+    'VA': {lat: 37.769337, lng: -78.169968}, // Virginia
+    'VT': {lat: 44.045876, lng: -72.710686}, // Vermont
+    'WA': {lat: 47.400902, lng: -121.490494}, // Washington
+    'WI': {lat: 44.268543, lng: -89.616508}, // Wisconsin
+    'WV': {lat: 38.349497, lng: -80.633476}, // West Virginia
+    'WY': {lat: 41.145548, lng: -104.802042} // Wyoming
+  };
+
+  // 工具
   const pad5 = s => String(s).padStart(5,'0');
   const quantile = (sorted,p) => {
     if (!sorted.length) return NaN;
@@ -119,14 +220,77 @@
     return n.toLocaleString();
   }
 
-  // —— 初始化 globe（透明画布）
-  const globe = Globe({ rendererConfig:{ alpha:true, antialias:true } })(document.getElementById('globe'))
+  // 初始化 globe（透明）
+  const globe = Globe({ rendererConfig:{ alpha:true, antialias:true } })(globeEl)
     .backgroundColor('rgba(0,0,0,0)')
     .pointOfView({lat:38,lng:-98,altitude:1.5});
-  window.addEventListener('resize', ()=>globe.width(window.innerWidth).height(window.innerHeight));
 
-  // **白色几乎透明的球体 + 白色网格**
-  globe.globeImageUrl(CLEAR).bumpImageUrl(CLEAR); // 透明纹理，避免默认黑材质
+  function sizeGlobeBox() {
+    // 容器填满整个右边区域
+    const pr = panelEl.getBoundingClientRect();
+    const rightWidth = window.innerWidth - pr.right;
+    globeEl.style.width = `${rightWidth}px`;
+    globeEl.style.height = `${window.innerHeight}px`;
+  }
+
+  function syncCanvasToBox() {
+    // 关键：把 Three.js 画布渲染尺寸设为容器实际尺寸（像素）
+    globe.width(globeEl.clientWidth).height(globeEl.clientHeight);
+  }
+
+  function positionGlobe() {
+    const pr = panelEl.getBoundingClientRect();
+    const centerX = pr.right + (window.innerWidth - pr.right) / 2;
+    const centerY = window.innerHeight / 2;
+    globeEl.style.left = `${centerX}px`;
+    globeEl.style.top  = `${centerY}px`;
+    globeEl.style.transform = 'translate(-50%, -50%)';
+  }
+
+  function layout() {
+    sizeGlobeBox();     // 1) 先确定容器盒子的尺寸
+    syncCanvasToBox();  // 2) 再把渲染尺寸绑定到容器像素大小
+    positionGlobe();    // 3) 最后按"右侧区域中点"定位容器中心
+  }
+
+  // 初始化后
+  layout();
+
+  // 窗口大小变化
+  window.addEventListener('resize', layout);
+
+  // 禁用鼠标滚轮缩放
+  const controls = globe.controls();
+  controls.enableZoom = false;
+  
+  // 用 pointOfView 做按钮缩放（只改 altitude）
+  const INIT_ALT = 1.5;         // 和初始化 pointOfView 的 altitude 保持一致
+  const ZOOM_STEP = 0.85;       // 每次缩放比例（0.85=放大；1/0.85=缩小）
+  const ALT_MIN = 0.6;          // 最近距离
+  const ALT_MAX = 3.5;          // 最远距离
+  const ANIM_MS = 350;          // 动画时长
+
+  function zoomBy(factor){
+    const pov = globe.pointOfView();  // {lat,lng,altitude}
+    const next = Math.max(ALT_MIN, Math.min(ALT_MAX, pov.altitude * factor));
+    globe.pointOfView({ lat: pov.lat, lng: pov.lng, altitude: next }, ANIM_MS);
+  }
+
+  document.getElementById('zoomIn').onclick  = () => zoomBy(ZOOM_STEP);      // 像地图：越小越近
+  document.getElementById('zoomOut').onclick = () => zoomBy(1 / ZOOM_STEP);
+  document.getElementById('zoomReset').onclick = () => {
+    const pov = globe.pointOfView();
+    globe.pointOfView({ lat: pov.lat, lng: pov.lng, altitude: INIT_ALT }, ANIM_MS);
+  };
+
+  // panel 尺寸变化/滚动条出现等：自动重算定位
+  new ResizeObserver(layout).observe(panelEl);
+
+  // 字体加载完成可能改变布局：再校准一次
+  if (document.fonts?.ready) document.fonts.ready.then(layout);
+
+  // 透明白球 & 经纬网
+  globe.globeImageUrl(CLEAR).bumpImageUrl(CLEAR);
   globe.showAtmosphere(false);
   if (typeof globe.showGraticules === 'function') globe.showGraticules(true);
   if (typeof globe.graticulesColor === 'function') globe.graticulesColor(CONFIG.GRATICULES_COLOR);
@@ -134,10 +298,10 @@
 
   setTimeout(()=>{
     const mat = globe.globeMaterial();
-    if (mat.color?.setStyle) mat.color.setStyle('#ffffff');      // 白色基色
-    if (mat.emissive?.setStyle) mat.emissive.setStyle('#000000'); // 不自发光
+    if (mat.color?.setStyle) mat.color.setStyle('#ffffff');
+    if (mat.emissive?.setStyle) mat.emissive.setStyle('#000000');
     mat.transparent = true;
-    mat.opacity = CONFIG.GLOBE_WHITE_OPACITY;  // 几乎透明的白
+    mat.opacity = CONFIG.GLOBE_WHITE_OPACITY;
     mat.depthWrite = false;
 
     const r = globe.renderer();
@@ -145,7 +309,6 @@
     r.setClearColor(0x000000, 0);
     globe.scene().background = null;
 
-    // 柔和光照，避免发灰/发黑
     const scene = globe.scene();
     scene.add(new THREE.AmbientLight(0xffffff, 0.45));
     const hemi = new THREE.HemisphereLight(0xffffff, 0x101010, 0.35);
@@ -155,19 +318,19 @@
 
   globe.polygonsTransitionDuration(250);
 
-  // —— topo → geojson
+  // topo → geojson
   const countiesGeo = topojson.feature(COUNTIES_TOPO, COUNTIES_TOPO.objects.counties);
   const landPolys = (WORLD_LAND?.features||[]).map(f=>Object.assign({},f,{isLand:true}));
 
-  // —— 状态与样式
+  // 状态
   const selectedFips = new Set(); let hoverId=null;
 
   function refreshStyles(){
     globe
-      .polygonCapColor(d => d.isLand ? 'rgba(255,255,255,0.30)'
+      .polygonCapColor(d => d.isLand ? 'rgba(200,200,200,0.25)'
                            : selectedFips.has(d.id) ? d.__baseColor
                            : (hoverId===d.id ? CONFIG.HOVER_COLOR : d.__baseColor))
-      .polygonSideColor(d => d.isLand ? 'rgba(255,255,255,0.30)'
+      .polygonSideColor(d => d.isLand ? 'rgba(200,200,200,0.25)'
                            : (hoverId===d.id ? CONFIG.HOVER_COLOR : d.__baseColor))
       .polygonStrokeColor(d => d.isLand ? 'rgba(0,0,0,0)' : 'transparent')
       .polygonAltitude(d => {
@@ -216,7 +379,7 @@
       const rec = byFips[pad5(f.id)];
       const v = Number(rec?.[metric]);
 
-      const t = Number.isFinite(v) ? Math.max(0, Math.min(1, norm(v))) : 0;  // 夹紧到[0,1]
+      const t = Number.isFinite(v) ? Math.max(0, Math.min(1, norm(v))) : 0;
       const idx = Math.min(PALETTE.length-1, Math.floor(t * PALETTE.length));
       const hexColor = PALETTE[idx] || PALETTE[0];
       const hex = String(hexColor).replace('#','');
@@ -255,17 +418,39 @@
     pinnedEl.innerHTML = items; pinnedEl.style.display = selectedFips.size ? 'block' : 'none';
   });
 
-  // (All) 选择约束
+  // (All) 选择约束 + 视角切换
   statesSel.addEventListener('change', () => {
     const opts = Array.from(statesSel.options);
     const allOpt = opts.find(o => o.value === '(All)');
     const chosen = Array.from(statesSel.selectedOptions).map(o => o.value);
     if (chosen.length > 1 && chosen.includes('(All)')) allOpt.selected = false;
     if (chosen.length === 0) allOpt.selected = true;
+    
+    // 视角切换逻辑
+    if (chosen.includes('(All)') || chosen.length === 0) {
+      // 选择(All)时，回到美国整体视角
+      globe.pointOfView({lat: 38, lng: -98, altitude: 1.5}, 800);
+    } else if (chosen.length === 1) {
+      // 选择单个州时，切换到该州中心
+      const stateCode = chosen[0];
+      const center = STATE_CENTERS[stateCode];
+      if (center) {
+        globe.pointOfView({lat: center.lat, lng: center.lng, altitude: 1.0}, 800);
+      }
+    } else {
+      // 选择多个州时，计算中心点
+      const centers = chosen.map(code => STATE_CENTERS[code]).filter(Boolean);
+      if (centers.length > 0) {
+        const avgLat = centers.reduce((sum, c) => sum + c.lat, 0) / centers.length;
+        const avgLng = centers.reduce((sum, c) => sum + c.lng, 0) / centers.length;
+        globe.pointOfView({lat: avgLat, lng: avgLng, altitude: 1.0}, 800);
+      }
+    }
+    
     updateData();
   });
 
-  // Reset：清县选 & 州回到 (All)
+  // Reset
   document.getElementById('resetSel').addEventListener('click',()=>{
     selectedFips.clear();
     const opts = Array.from(statesSel.options);
@@ -273,10 +458,15 @@
     const allOpt = opts.find(o => o.value === '(All)');
     if (allOpt) allOpt.selected = true;
     pinnedEl.style.display='none';
+    
+    // 重置视角到美国整体视角
+    globe.pointOfView({lat: 38, lng: -98, altitude: 1.5}, 800);
+    
     refreshStyles();
     updateData();
   });
 
+  // 初次渲染数据
   updateData();
 })();
 </script>
