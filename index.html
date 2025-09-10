@@ -3,292 +3,194 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>US County Housing — Cartopy Globe (Transparent)</title>
+<title>US County Housing — No Globe Mesh</title>
 <style>
-  :root{ --panel-bg:rgba(255,255,255,.25); --panel-border:rgba(255,255,255,.4); --text:#1a1a1a; --muted:#666; }
   html,body{height:100%;margin:0;background:transparent;}
-  body{font-family:Inter,system-ui,-apple-system,Segoe UI,Arial;color:var(--text);overflow:hidden;}
+  body{font-family:Inter,system-ui,-apple-system,Segoe UI,Arial;color:#1a1a1a;overflow:hidden;}
   #globe{position:fixed; inset:0; background:transparent;}
   #globe canvas{background:transparent !important;}
   .panel{position:fixed;left:20px;top:20px;z-index:10;width:280px;max-height:80vh;overflow:auto;
-         background:var(--panel-bg);border:1px solid var(--panel-border);backdrop-filter:blur(30px) saturate(200%);
+         background:rgba(255,255,255,.25);border:1px solid rgba(255,255,255,.4);backdrop-filter:blur(30px) saturate(200%);
          box-shadow:0 8px 32px rgba(0,0,0,.1),0 1px 0 rgba(255,255,255,.6) inset;border-radius:16px;padding:20px;}
   .section{margin-bottom:20px;}
-  label{display:block;font-size:13px;color:var(--muted);margin:0 0 6px;}
-  select,button{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--panel-border);
-                background:rgba(255,255,255,.3);color:var(--text);font-size:13px;margin-bottom:12px;backdrop-filter:blur(15px);}
+  label{display:block;font-size:13px;color:#666;margin:0 0 6px;}
+  select,button{width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.4);
+                background:rgba(255,255,255,.3);color:#1a1a1a;font-size:13px;margin-bottom:12px;backdrop-filter:blur(15px);}
   select[multiple]{min-height:90px;}
   .legend-title{font-weight:700;margin-bottom:8px;}
   .bar{height:12px;border-radius:8px;margin:8px 0;}
-  .minmax{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;}
-  .err{position:fixed;right:20px;bottom:20px;background:#7f1d1d;color:#fee2e2;padding:10px 12px;border-radius:10px;border:1px solid #ef4444}
-  .pin{border:1px solid var(--panel-border);border-radius:12px;padding:10px 12px;margin:6px 0;background:rgba(255,255,255,.2)}
+  .minmax{display:flex;justify-content:space-between;color:#666;font-size:12px;}
+  .pin{border:1px solid rgba(255,255,255,.4);border-radius:12px;padding:10px 12px;margin:6px 0;background:rgba(255,255,255,.2)}
 </style>
 </head>
 <body>
 
-  <div class="panel">
-    <div class="section">
-      <div id="legend-title" class="legend-title"></div>
-      <div class="bar" id="legend-bar"></div>
-      <div class="minmax"><span id="legend-min">-</span><span id="legend-max">-</span></div>
-    </div>
-    <div class="section">
-      <label for="metric">Metric</label>
-      <select id="metric"></select>
-      <label for="states">State</label>
-      <select id="states" multiple></select>
-      <button id="resetSel">Reset Selection</button>
-      <div id="period" style="color:#888;font-size:12px;"></div>
-    </div>
-    <div class="section"><div id="pinned" style="display:none"></div></div>
+<div class="panel">
+  <div class="section">
+    <div id="legend-title" class="legend-title"></div>
+    <div class="bar" id="legend-bar"></div>
+    <div class="minmax"><span id="legend-min">-</span><span id="legend-max">-</span></div>
   </div>
+  <div class="section">
+    <label for="metric">Metric</label>
+    <select id="metric"></select>
+    <label for="states">State</label>
+    <select id="states" multiple></select>
+    <button id="resetSel">Reset Selection</button>
+    <div id="period" style="color:#888;font-size:12px;"></div>
+  </div>
+  <div class="section"><div id="pinned" style="display:none"></div></div>
+</div>
 
-  <div id="globe"></div>
+<div id="globe"></div>
 
-  <script src="https://unpkg.com/three@0.164.1/build/three.min.js"></script>
-  <script src="https://unpkg.com/globe.gl@2.34.5/dist/globe.gl.min.js"></script>
-  <script src="https://unpkg.com/topojson-client@3"></script>
+<script src="https://unpkg.com/three@0.164.1/build/three.min.js"></script>
+<script src="https://unpkg.com/globe.gl@2.34.5/dist/globe.gl.min.js"></script>
+<script src="https://unpkg.com/topojson-client@3"></script>
 
-  <script>
-  (async function(){
-    /* ===== 样式配置 ===== */
-    const CONFIG = {
-      BACKGROUND: 'rgba(0,0,0,0)',
-      GLOBE_OPACITY: 0,                 // 0 = 完全透明
-      SHOW_GRATICULES: true,
-      GRATICULES_COLOR: 'rgba(255,255,255,0.08)',
-      LAND_COLOR: 'rgba(255,255,255,0.30)',
-      LAND_SIDE:  'rgba(255,255,255,0.30)',
-      LAND_STROKE:'rgba(0,0,0,0)',
-      LAND_ALTITUDE: 0.005,
-      COUNTY_OPACITY: 0.70,
-      ALT_BASE: 0.015,
-      ALT_HOVER_MULT: 1.0,
-      ALT_SELECT_MULT: 2.2,
-      PALETTE: ['#f7fbff','#deebf7','#c6dbef','#9ecae1','#6baed6','#4292c6','#2171b5','#084594'],
-      HOVER_COLOR: 'rgba(255,255,255,0.85)',
-      LABEL_BG:'rgba(255,255,255,0.25)', LABEL_BORDER:'1px solid rgba(255,255,255,0.4)', LABEL_TEXT:'#1a1a1a',
-      TRANSITION_MS: 250
-    };
+<script>
+(async function(){
+  const CONFIG = {
+    SHOW_GRATICULES: true,
+    GRATICULES_COLOR: 'rgba(0,0,0,0.2)',
+    LAND_COLOR: 'rgba(255,255,255,0.30)',
+    COUNTY_OPACITY: 0.70,
+    ALT_BASE: 0.015,
+    ALT_SELECT_MULT: 2.2,
+    ALT_HOVER_MULT: 1.0,
+    PALETTE: ['#f7fbff','#deebf7','#c6dbef','#9ecae1','#6baed6','#4292c6','#2171b5','#084594'],
+    HOVER_COLOR: 'rgba(255,255,255,0.85)'
+  };
 
-    function showErr(msg){console.error(msg);const el=document.createElement('div');el.className='err';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),8000);}
+  // 加载外部 JSON 数据
+  const [rows, period, countiesTopo, worldLand] = await Promise.all([
+    fetch('./county_values_latest.json').then(r=>r.json()),
+    fetch('./period.txt').then(r=>r.text()).catch(()=> 'Latest'),
+    fetch('./counties-10m.json').then(r=>r.json()),
+    fetch('./world_land_natural.json').then(r=>r.json())
+  ]);
 
-    // 加载数据
-    let rows, PERIOD='Latest', COUNTIES_TOPO, WORLD_LAND;
-    try{
-      const [v,p,c,w] = await Promise.all([
-        fetch('./county_values_latest.json').then(r=>r.json()),
-        fetch('./period.txt').then(r=>r.ok?r.text():'Latest').catch(()=> 'Latest'),
-        fetch('./counties-10m.json').then(r=>r.json()),
-        fetch('./world_land_natural.json').then(r=>r.json())
-      ]);
-      rows=v; PERIOD=(p||'Latest').trim(); COUNTIES_TOPO=c; WORLD_LAND=w;
-    }catch(e){ showErr('Failed to load JSON files. Ensure they are next to index.html'); return; }
+  // DOM refs
+  const metricSel = document.getElementById('metric');
+  const statesSel = document.getElementById('states');
+  const periodEl  = document.getElementById('period');
+  const legendTitle = document.getElementById('legend-title');
+  const legendMin   = document.getElementById('legend-min');
+  const legendMax   = document.getElementById('legend-max');
+  const legendBar   = document.getElementById('legend-bar');
+  const pinnedEl    = document.getElementById('pinned');
 
-    // DOM
-    const metricSel = document.getElementById('metric');
-    const statesSel = document.getElementById('states');
-    const periodEl  = document.getElementById('period');
-    const legendTitle = document.getElementById('legend-title');
-    const legendMin   = document.getElementById('legend-min');
-    const legendMax   = document.getElementById('legend-max');
-    const legendBar   = document.getElementById('legend-bar');
-    const pinnedEl    = document.getElementById('pinned');
+  // 初始化下拉
+  const metrics = Object.keys(rows[0]).filter(k=>!['FIPS','REGION','STATE_CODE'].includes(k));
+  metricSel.innerHTML = metrics.map(m=>`<option value="${m}">${m.replaceAll('_',' ').toUpperCase()}</option>`).join('');
+  metricSel.value = metrics.includes('MEDIAN_DOM') ? 'MEDIAN_DOM' : metrics[0];
+  const states = Array.from(new Set(rows.map(r=>r.STATE_CODE))).sort();
+  statesSel.innerHTML = `<option value="(All)">(All)</option>` + states.map(s=>`<option value="${s}">${s}</option>`).join('');
+  statesSel.options[0].selected = true;
+  periodEl.textContent = `Period: ${period.trim()}`;
 
-    // 下拉
-    const metrics = rows.length ? Object.keys(rows[0]).filter(k=>!['FIPS','REGION','STATE_CODE'].includes(k)) : [];
-    metricSel.innerHTML = metrics.map(m=>`<option value="${m}">${m.replaceAll('_',' ').toUpperCase()}</option>`).join('');
-    if (metrics.includes('MEDIAN_DOM')) metricSel.value = 'MEDIAN_DOM';
-    const states = Array.from(new Set(rows.map(r=>r.STATE_CODE))).sort();
-    statesSel.innerHTML = `<option value="(All)">(All)</option>` + states.map(s=>`<option value="${s}">${s}</option>`).join('');
-    if (statesSel.options.length) statesSel.options[0].selected = true;
-    periodEl.textContent = `Period: ${PERIOD}`;
+  // 工具函数
+  const pad5 = s => String(s).padStart(5,'0');
+  const quantile = (sorted,p) => sorted[Math.floor((sorted.length-1)*p)];
+  const fmtVal = (metric,v)=>{
+    const n=Number(v); if(!Number.isFinite(n)) return 'No data';
+    if(metric.includes('PRICE')||metric.includes('PPSF')) return `$${n.toLocaleString()}`;
+    if(metric==='MEDIAN_DOM') return `${Math.round(n)} days`;
+    if(['AVG_SALE_TO_LIST','SOLD_ABOVE_LIST','PRICE_DROPS','OFF_MARKET_IN_TWO_WEEKS'].includes(metric)) return `${(n*100).toFixed(1)}%`;
+    return n.toLocaleString();
+  };
 
-    // 工具函数
-    const pad5 = s => String(s).padStart(5,'0');
-    const quantile = (sorted,p) => sorted.length ? sorted[Math.floor((sorted.length-1)*p)] : NaN;
-    function fmtVal(metric, v){
-      const n=Number(v);
-      if(!Number.isFinite(n)) return 'No data';
-      if(metric.includes('PRICE')||metric.includes('PPSF')) return `$${n.toLocaleString()}`;
-      if(metric==='MEDIAN_DOM') return `${Math.round(n)} days`;
-      if(['AVG_SALE_TO_LIST','SOLD_ABOVE_LIST','PRICE_DROPS','OFF_MARKET_IN_TWO_WEEKS'].includes(metric)) return `${(n*100).toFixed(1)}%`;
-      return n.toLocaleString();
-    }
+  // 初始化 globe
+  const globe = Globe({ rendererConfig:{alpha:true,antialias:true} })(document.getElementById('globe'))
+    .backgroundColor('rgba(0,0,0,0)')
+    .pointOfView({lat:38,lng:-98,altitude:1.5});
 
-    // Globe 初始化：关键——alpha: true
-    const globe = Globe({
-      rendererConfig: { alpha: true, antialias: true }
-    })(document.getElementById('globe'))
-      .backgroundColor(CONFIG.BACKGROUND)
-      .width(window.innerWidth).height(window.innerHeight)
-      .pointOfView({ lat: 38, lng: -98, altitude: 1.5 });
+  // 隐藏球体网格
+  setTimeout(()=>{
+    const scene = globe.scene();
+    const globeMesh = scene.children.find(o => o.material === globe.globeMaterial());
+    if (globeMesh) globeMesh.visible = false;
+  },300);
 
-    window.addEventListener('resize', ()=>globe.width(window.innerWidth).height(window.innerHeight));
+  // 经纬网
+  if (typeof globe.showGraticules === 'function') globe.showGraticules(CONFIG.SHOW_GRATICULES);
+  if (typeof globe.graticulesColor === 'function') globe.graticulesColor(CONFIG.GRATICULES_COLOR);
 
-    // 统一的透明设置（初始化和纹理变更后都调用）
-    function makeGlobeTransparent(){
-      const mat = globe.globeMaterial();
-      mat.transparent = true;
-      mat.opacity = CONFIG.GLOBE_OPACITY; // 0
-      mat.depthWrite = false;
+  // topo → geojson
+  const countiesGeo = topojson.feature(countiesTopo, countiesTopo.objects.counties);
+  const landPolys = (worldLand?.features||[]).map(f=>Object.assign({},f,{isLand:true}));
 
-      const r = globe.renderer();
-      if (r.setClearAlpha) r.setClearAlpha(0);
-      r.setClearColor(0x000000, 0);
-      globe.scene().background = null;
-    }
+  const selectedFips = new Set(); let hoverId=null;
 
-    setTimeout(()=>{
-      globe.showAtmosphere(false).showGraticules(CONFIG.SHOW_GRATICULES);
-
-      // 兼容 graticule(s)Color
-      const setGraticuleColor =
-        (globe.graticulesColor && globe.graticulesColor.bind(globe)) ||
-        (globe.graticuleColor  && globe.graticuleColor.bind(globe));
-      if (setGraticuleColor) setGraticuleColor(CONFIG.GRATICULES_COLOR);
-
-      globe.globeImageUrl(null).bumpImageUrl(null); // 不使用纹理
-      makeGlobeTransparent();
-
-      globe.polygonsTransitionDuration(CONFIG.TRANSITION_MS);
-    }, 50);
-
-    // topo -> geojson（一次）
-    const countiesGeo = topojson.feature(COUNTIES_TOPO, COUNTIES_TOPO.objects.counties);
-    const landPolysConst = (WORLD_LAND?.features || []).map(f => Object.assign({}, f, {isLand:true}));
-
-    // 状态
-    const selectedFips = new Set(); let hoverId=null;
-
-    function refreshStyles(){
-      globe
-        .polygonCapColor(d => d.isLand ? CONFIG.LAND_COLOR
-                             : selectedFips.has(d.id) ? d.__baseColor
-                             : (hoverId===d.id ? CONFIG.HOVER_COLOR : d.__baseColor))
-        .polygonSideColor(d => d.isLand ? CONFIG.LAND_SIDE
-                             : (hoverId===d.id ? CONFIG.HOVER_COLOR : d.__baseColor))
-        .polygonStrokeColor(d => d.isLand ? CONFIG.LAND_STROKE : 'transparent')
-        .polygonAltitude(d => {
-          if (d.isLand) return CONFIG.LAND_ALTITUDE;
-          const a = d.__altBase || CONFIG.ALT_BASE;
-          if (selectedFips.has(d.id)) return a * CONFIG.ALT_SELECT_MULT;
-          if (hoverId===d.id) return a * CONFIG.ALT_HOVER_MULT;
-          return a;
-        });
-    }
-
-    function clearLegend(){
-      legendTitle.textContent = '';
-      legendBar.style.background = 'none';
-      legendMin.textContent = '-';
-      legendMax.textContent = '-';
-    }
-
-    function updateData(){
-      const metric = metricSel.value;
-      const chosen = Array.from(statesSel.selectedOptions).map(o=>o.value);
-      const all = chosen.includes('(All)');
-
-      const byFips = Object.create(null);
-      rows.forEach(r=>byFips[pad5(r.FIPS)] = r);
-
-      const vals = rows.filter(r=>all || chosen.includes(r.STATE_CODE))
-                       .map(r=>Number(r[metric])).filter(Number.isFinite).sort((a,b)=>a-b);
-
-      if(!vals.length){
-        globe.polygonsData(landPolysConst);
-        clearLegend();
-        refreshStyles();
-        return;
-      }
-
-      const vmin = quantile(vals,0.05), vmax = quantile(vals,0.95);
-      const norm = v => (v - vmin)/(vmax - vmin || 1);
-
-      const dataFeats = countiesGeo.features.filter(f=>{
-        const rec = byFips[pad5(f.id)];
-        return !!rec && (all || chosen.includes(rec.STATE_CODE));
-      }).map(f=>{
-        const rec = byFips[pad5(f.id)];
-        const v = Number(rec?.[metric]);
-        const idx = Number.isFinite(v) ? Math.min(7, Math.floor(Math.max(0,Math.min(1,norm(v)))*8)) : 0;
-        const hex = CONFIG.PALETTE[idx].replace('#','');
-        const r = parseInt(hex.slice(0,2),16), g=parseInt(hex.slice(2,4),16), b=parseInt(hex.slice(4,6),16);
-        f.__baseColor = `rgba(${r}, ${g}, ${b}, ${CONFIG.COUNTY_OPACITY})`;
-        f.__altBase = CONFIG.ALT_BASE;
-        f.__county = rec?.REGION ?? f.properties?.name ?? 'N/A';
-        f.__state  = rec?.STATE_CODE ?? '';
-        f.__value  = fmtVal(metric, v);
-        f.__label  = `<div style="background:${CONFIG.LABEL_BG}; border:${CONFIG.LABEL_BORDER}; padding:12px 16px; border-radius:12px; font:13px/1.4 Inter,system-ui; color:${CONFIG.LABEL_TEXT};">
-          <b>${f.__county}</b><br>${f.__state} — ${f.__value}<br>
-          <span style="color:#666; font-size:11px;">${PERIOD} • ${metric.replaceAll('_',' ').toUpperCase()}</span>
-        </div>`;
-        return f;
+  function refreshStyles(){
+    globe
+      .polygonCapColor(d => selectedFips.has(d.id)? d.__baseColor : (hoverId===d.id? CONFIG.HOVER_COLOR : d.__baseColor))
+      .polygonSideColor(d => selectedFips.has(d.id)? d.__baseColor : (hoverId===d.id? CONFIG.HOVER_COLOR : d.__baseColor))
+      .polygonStrokeColor(()=> 'transparent')
+      .polygonAltitude(d=>{
+        const a = d.__altBase||CONFIG.ALT_BASE;
+        if (selectedFips.has(d.id)) return a*CONFIG.ALT_SELECT_MULT;
+        if (hoverId===d.id) return a*CONFIG.ALT_HOVER_MULT;
+        return a;
       });
+  }
 
-      const allPolys = [...landPolysConst, ...dataFeats];
+  function updateData(){
+    const metric = metricSel.value;
+    const chosen = Array.from(statesSel.selectedOptions).map(o=>o.value);
+    const all = chosen.includes('(All)');
 
-      globe
-        .polygonsData(allPolys)
-        .polygonLabel(f => f.isLand ? null : (f.__label || `County ${f.id}`))
-        .polygonsTransitionDuration(CONFIG.TRANSITION_MS);
+    const byFips = Object.fromEntries(rows.map(r=>[pad5(r.FIPS),r]));
+    const vals = rows.filter(r=>all||chosen.includes(r.STATE_CODE))
+                     .map(r=>+r[metric]).filter(Number.isFinite).sort((a,b)=>a-b);
+    if (!vals.length) return;
+    const vmin=quantile(vals,0.05), vmax=quantile(vals,0.95);
+    const norm=v=>(v-vmin)/(vmax-vmin||1);
 
-      legendTitle.textContent = metric.replaceAll('_',' ').toUpperCase();
-      legendBar.style.background = `linear-gradient(90deg, ${CONFIG.PALETTE.join(',')})`;
-      legendMin.textContent = fmtVal(metric, vmin);
-      legendMax.textContent = fmtVal(metric, vmax);
+    const dataFeats = countiesGeo.features.map(f=>{
+      const rec = byFips[pad5(f.id)];
+      if(!rec) return null;
+      const v = +rec[metric];
+      const idx = Number.isFinite(v)? Math.min(7,Math.floor(norm(v)*8)):0;
+      const hex=CONFIG.PALETTE[idx].slice(1);
+      const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
+      f.__baseColor=`rgba(${r},${g},${b},${CONFIG.COUNTY_OPACITY})`;
+      f.__altBase=CONFIG.ALT_BASE;
+      f.__county=rec.REGION; f.__state=rec.STATE_CODE; f.__value=fmtVal(metric,v);
+      f.__label=`<div><b>${f.__county}</b><br>${f.__state} — ${f.__value}</div>`;
+      return f;
+    }).filter(Boolean);
 
-      refreshStyles();
+    globe.polygonsData([...landPolys,...dataFeats])
+         .polygonLabel(f=>f.isLand?null:f.__label);
 
-      // 关闭后续过渡，避免 hover 抖动
-      setTimeout(()=>globe.polygonsTransitionDuration(0), CONFIG.TRANSITION_MS+50);
-    }
+    legendTitle.textContent = metric.replaceAll('_',' ').toUpperCase();
+    legendBar.style.background=`linear-gradient(90deg,${CONFIG.PALETTE.join(',')})`;
+    legendMin.textContent=fmtVal(metric,vmin);
+    legendMax.textContent=fmtVal(metric,vmax);
+    refreshStyles();
+  }
 
-    // hover & click
-    globe.onPolygonHover(f => { hoverId = (f && !f.isLand) ? f.id : null; refreshStyles(); });
-    globe.onPolygonClick(f => {
-      if(!f || f.isLand) return;
-      selectedFips.has(f.id) ? selectedFips.delete(f.id) : selectedFips.add(f.id);
-      refreshStyles();
-      const data = (globe.polygonsData()||[]).filter(x=>!x.isLand && selectedFips.has(x.id))
-        .map(x=>`<div class="pin"><b>${x.__county}</b><br><span style="color:#666">${x.__state} — ${x.__value}</span></div>`).join('');
-      pinnedEl.innerHTML = data; pinnedEl.style.display = selectedFips.size ? 'block':'none';
-    });
+  globe.onPolygonHover(f=>{hoverId=f?f.id:null;refreshStyles();});
+  globe.onPolygonClick(f=>{
+    if(!f) return;
+    selectedFips.has(f.id)?selectedFips.delete(f.id):selectedFips.add(f.id);
+    refreshStyles();
+    pinnedEl.innerHTML=[...selectedFips].map(id=>{
+      const d=globe.polygonsData().find(x=>x.id===id);
+      return `<div class="pin"><b>${d.__county}</b><br><span>${d.__state} — ${d.__value}</span></div>`;
+    }).join('');
+    pinnedEl.style.display=selectedFips.size?'block':'none';
+  });
 
-    // (All) 选择约束
-    statesSel.addEventListener('change', () => {
-      const opts = Array.from(statesSel.options);
-      const allOpt = opts.find(o => o.value === '(All)');
-      const chosen = Array.from(statesSel.selectedOptions).map(o => o.value);
-      if (chosen.length > 1 && chosen.includes('(All)')) {
-        allOpt.selected = false;
-      }
-      if (chosen.length === 0) {
-        allOpt.selected = true;
-      }
-      updateData();
-    });
+  metricSel.addEventListener('change',updateData);
+  statesSel.addEventListener('change',updateData);
+  document.getElementById('resetSel').addEventListener('click',()=>{
+    selectedFips.clear();refreshStyles();pinnedEl.style.display='none';updateData();
+  });
 
-    // Reset：清县选 & 州回到 (All)
-    document.getElementById('resetSel').addEventListener('click',()=>{
-      selectedFips.clear();
-      const opts = Array.from(statesSel.options);
-      opts.forEach(o => (o.selected = false));
-      const allOpt = opts.find(o => o.value === '(All)');
-      if (allOpt) allOpt.selected = true;
-      pinnedEl.style.display='none';
-      refreshStyles();
-      updateData();
-    });
-
-    // 首次渲染
-    updateData();
-
-    // 若后续你改变过纹理（一般不会），记得再调一次
-    // globe.globeImageUrl(null).bumpImageUrl(null); makeGlobeTransparent();
-  })();
-  </script>
+  updateData();
+})();
+</script>
 </body>
 </html>
